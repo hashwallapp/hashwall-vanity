@@ -46,7 +46,11 @@ __constant__ fe25519 fe25519_sqrtm1 = { -32595792, -7943725,  9377950,  3500415,
 __constant__ fe25519 ed25519_d = { -10913610, 13857413, -15372611, 6949391,   114729, -8787816, -6275908, -3247719, -18696448, -12055116 };
 __constant__ fe25519 ed25519_d2 = { -21827239, -5839606,  -30745221, 13898782, 229458, 15978800, -12551817, -6495438, 29715968, 9444199 };
 
-__device__ static volatile unsigned char optblocker_u8;
+#if 0
+//__device__ static volatile unsigned char optblocker;
+#else
+__device__ static u32 optblocker[NTHREADS];
+#endif
 
 __device__ void fe25519_0(fe25519 h);
 __device__ void fe25519_1(fe25519 h);

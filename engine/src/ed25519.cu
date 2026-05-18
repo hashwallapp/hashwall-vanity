@@ -1,20 +1,20 @@
 #include "ed25519.h"
 
-__device__ void fe25519_0(fe25519 h) {
+__device__ __forceinline__ void fe25519_0(fe25519 h) {
     memset(&h[0], 0, 10 * sizeof h[0]);
 }
 
-__device__ void fe25519_1(fe25519 h) {
+__device__ __forceinline__ void fe25519_1(fe25519 h) {
     h[0] = 1;
     h[1] = 0;
     memset(&h[2], 0, 8 * sizeof h[0]);
 }
 
-__device__ inline void fe25519_copy(fe25519 h, const fe25519 f) {
+__device__ __forceinline__ void fe25519_copy(fe25519 h, const fe25519 f) {
     memcpy(h, f, 10 * sizeof h[0]);
 }
 
-__device__ void fe25519_add(fe25519 h, const fe25519 f, const fe25519 g) {
+__device__ __forceinline__ void fe25519_add(fe25519 h, const fe25519 f, const fe25519 g) {
     int32_t h0 = f[0] + g[0];
     int32_t h1 = f[1] + g[1];
     int32_t h2 = f[2] + g[2];
@@ -442,7 +442,7 @@ __device__ void fe25519_sq(fe25519 h, const fe25519 f) {
     h[9] = (int32_t) h9;
 }
 
-__device__ uint64_t load_3(const unsigned char *in) {
+__device__ __forceinline__ uint64_t load_3(const unsigned char *in) {
     uint64_t result;
 
     result = (uint64_t) in[0];
@@ -452,7 +452,7 @@ __device__ uint64_t load_3(const unsigned char *in) {
     return result;
 }
 
-__device__ uint64_t load_4(const unsigned char *in) {
+__device__ __forceinline__ uint64_t load_4(const unsigned char *in) {
     uint64_t result;
 
     result = (uint64_t) in[0];
@@ -464,68 +464,40 @@ __device__ uint64_t load_4(const unsigned char *in) {
 }
 
 __device__ void fe25519_frombytes(fe25519 h, const unsigned char *s) {
-    int64_t h0 = load_4(s);
-    int64_t h1 = load_3(s + 4) << 6;
-    int64_t h2 = load_3(s + 7) << 5;
-    int64_t h3 = load_3(s + 10) << 3;
-    int64_t h4 = load_3(s + 13) << 2;
-    int64_t h5 = load_4(s + 16);
-    int64_t h6 = load_3(s + 20) << 7;
-    int64_t h7 = load_3(s + 23) << 5;
-    int64_t h8 = load_3(s + 26) << 4;
-    int64_t h9 = (load_3(s + 29) & 8388607) << 2;
-    int64_t carry0;
-    int64_t carry1;
-    int64_t carry2;
-    int64_t carry3;
-    int64_t carry4;
-    int64_t carry5;
-    int64_t carry6;
-    int64_t carry7;
-    int64_t carry8;
-    int64_t carry9;
+    i64 h0 = load_4(s);
+    i64 h1 = load_3(s + 4) << 6;
+    i64 h2 = load_3(s + 7) << 5;
+    i64 h3 = load_3(s + 10) << 3;
+    i64 h4 = load_3(s + 13) << 2;
+    i64 h5 = load_4(s + 16);
+    i64 h6 = load_3(s + 20) << 7;
+    i64 h7 = load_3(s + 23) << 5;
+    i64 h8 = load_3(s + 26) << 4;
+    i64 h9 = (load_3(s + 29) & 8388607) << 2;
 
-    carry9 = (h9 + (int64_t)(1 << 24)) >> 25;
-    h0 += carry9 * 19;
-    h9 -= carry9 << 25;
-    carry1 = (h1 + (int64_t)(1 << 24)) >> 25;
-    h2 += carry1;
-    h1 -= carry1 << 25;
-    carry3 = (h3 + (int64_t)(1 << 24)) >> 25;
-    h4 += carry3;
-    h3 -= carry3 << 25;
-    carry5 = (h5 + (int64_t)(1 << 24)) >> 25;
-    h6 += carry5;
-    h5 -= carry5 << 25;
-    carry7 = (h7 + (int64_t)(1 << 24)) >> 25;
-    h8 += carry7;
-    h7 -= carry7 << 25;
-    carry0 = (h0 + (int64_t)(1 << 25)) >> 26;
-    h1 += carry0;
-    h0 -= carry0 << 26;
-    carry2 = (h2 + (int64_t)(1 << 25)) >> 26;
-    h3 += carry2;
-    h2 -= carry2 << 26;
-    carry4 = (h4 + (int64_t)(1 << 25)) >> 26;
-    h5 += carry4;
-    h4 -= carry4 << 26;
-    carry6 = (h6 + (int64_t)(1 << 25)) >> 26;
-    h7 += carry6;
-    h6 -= carry6 << 26;
-    carry8 = (h8 + (int64_t)(1 << 25)) >> 26;
-    h9 += carry8;
-    h8 -= carry8 << 26;
+    int64_t carry0, carry1, carry2, carry3, carry4, carry5, carry6, carry7, carry8, carry9;
 
-    h[0] = (int32_t)h0;
-    h[1] = (int32_t)h1;
-    h[2] = (int32_t)h2;
-    h[3] = (int32_t)h3;
-    h[4] = (int32_t)h4;
-    h[5] = (int32_t)h5;
-    h[6] = (int32_t)h6;
-    h[7] = (int32_t)h7;
-    h[8] = (int32_t)h8;
-    h[9] = (int32_t)h9;
+    carry9 = (h9 + (int64_t)(1 << 24)) >> 25; h0 += carry9*19; h9 -= carry9 << 25;
+    carry1 = (h1 + (int64_t)(1 << 24)) >> 25; h2 += carry1;    h1 -= carry1 << 25;
+    carry3 = (h3 + (int64_t)(1 << 24)) >> 25; h4 += carry3;    h3 -= carry3 << 25;
+    carry5 = (h5 + (int64_t)(1 << 24)) >> 25; h6 += carry5;    h5 -= carry5 << 25;
+    carry7 = (h7 + (int64_t)(1 << 24)) >> 25; h8 += carry7;    h7 -= carry7 << 25;
+    carry0 = (h0 + (int64_t)(1 << 25)) >> 26; h1 += carry0;    h0 -= carry0 << 26;
+    carry2 = (h2 + (int64_t)(1 << 25)) >> 26; h3 += carry2;    h2 -= carry2 << 26;
+    carry4 = (h4 + (int64_t)(1 << 25)) >> 26; h5 += carry4;    h4 -= carry4 << 26;
+    carry6 = (h6 + (int64_t)(1 << 25)) >> 26; h7 += carry6;    h6 -= carry6 << 26;
+    carry8 = (h8 + (int64_t)(1 << 25)) >> 26; h9 += carry8;    h8 -= carry8 << 26;
+
+    h[0] = (i32)h0;
+    h[1] = (i32)h1;
+    h[2] = (i32)h2;
+    h[3] = (i32)h3;
+    h[4] = (i32)h4;
+    h[5] = (i32)h5;
+    h[6] = (i32)h6;
+    h[7] = (i32)h7;
+    h[8] = (i32)h8;
+    h[9] = (i32)h9;
 }
 
 __device__ void fe25519_tobytes(unsigned char *s, const fe25519 h) {
@@ -985,12 +957,13 @@ __device__ void fe25519_invert(fe25519 out, const fe25519 z) {
 }
 
 __device__ int sodium_is_zero(const unsigned char *n, const size_t nlen) {
-    size_t                 i;
-    volatile unsigned char d = 0U;
+    // NOTE: removed volatile, changed type from u8 to u32
+    u32 d = 0U;
 
-    for (i = 0U; i < nlen; i++) {
+    for (size_t i = 0U; i < nlen; i++) {
         d |= n[i];
     }
+
     return 1 & ((d - 1) >> 8);
 }
 
@@ -1055,7 +1028,7 @@ __device__ int ge25519_frombytes(ge25519_p3 *h, const unsigned char *s) {
     fe25519_cmov(h->X, x_sqrtm1, 1 - has_m_root);
 
     fe25519_neg(negx, h->X);
-    fe25519_cmov(h->X, negx, fe25519_isnegative(h->X) ^ (((s[31] >> 5) ^ optblocker_u8) >> 2));
+    fe25519_cmov(h->X, negx, fe25519_isnegative(h->X) ^ (((s[31] >> 5) ^ optblocker[TID]) >> 2));
     fe25519_mul(h->T, h->X, h->Y);
 
     return (has_m_root | has_p_root) - 1;
@@ -1182,7 +1155,7 @@ __device__ unsigned char negative(signed char b) {
     return x;
 #else
     const uint8_t x = (uint8_t) b; /* 0..127: no 128..255: yes */
-    return ((x >> 5) ^ optblocker_u8) >> 2; /* 1: yes; 0: no */
+    return ((x >> 5) ^ optblocker[TID]) >> 2; /* 1: yes; 0: no */
 #endif
 }
 
@@ -1202,7 +1175,7 @@ __device__ unsigned char equal(signed char b, signed char c) {
     uint32_t            y  = (uint32_t) x; /* 0: yes; 1..255: no */
 
     y--;
-    return ((y >> 29) ^ optblocker_u8) >> 2; /* 1: yes; 0: no */
+    return ((y >> 29) ^ optblocker[TID]) >> 2; /* 1: yes; 0: no */
 #endif
 }
 
@@ -1246,11 +1219,12 @@ __device__ void ge25519_cmov8(ge25519_precomp *t, const ge25519_precomp precomp[
     ge25519_cmov(t, &minust, bnegative);
 }
 
-__device__ void ge25519_cmov8_base(ge25519_precomp *t, const int pos, const signed char b) {
-    static const ge25519_precomp base[32][8] = { /* base[i][j] = (j+1)*256^i*B */
+__constant__ ge25519_precomp precomp_base[32][8] = { /* base[i][j] = (j+1)*256^i*B */
 #include "fe_25_5_base.h"
-    };
-    ge25519_cmov8(t, base[pos], b);
+};
+
+__device__ void ge25519_cmov8_base(ge25519_precomp *t, const int pos, const signed char b) {
+    ge25519_cmov8(t, precomp_base[pos], b);
 }
 
 __device__ void ge25519_add_precomp(ge25519_p1p1 *r, const ge25519_p3 *p, const ge25519_precomp *q) {
@@ -1417,6 +1391,7 @@ __device__ int ge25519_is_on_main_subgroup(const ge25519_p3 *p) {
 __device__ int is_valid_point(const unsigned char *p) {
     ge25519_p3 p_p3;
 
+    // TODO: maybe `ge25519_is_on_curve` is sufficient on its own?
     if (
         0
         //|| ge25519_is_canonical(p) == 0

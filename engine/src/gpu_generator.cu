@@ -13,7 +13,8 @@
         }                                                             \
     } while (0)
 
-#include "config.h"
+#define NTHREADS (gridDim.x * blockDim.x)
+#define TID (blockDim.x * blockIdx.x + threadIdx.x)
 #define each_coal_tid(type, item, ptr, size, stride_offset) each_strided(type, item, ptr, size, TID, NTHREADS, stride_offset)
 #include "slpng.c"
 #include "third_party/sha256.cu"
@@ -329,6 +330,27 @@ int main() {
     prepare_sql_statements(db);
 
     //
+    // query device properties
+    //
+
+    cudaDeviceProp prop = {0};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+
+    int max_threads_per_sm = prop.maxThreadsPerMultiProcessor;
+    int sm_count = prop.multiProcessorCount;
+    int total_threads = max_threads_per_sm * sm_count;
+
+    printf("DEVICE PROPERTIES\n"
+           "device name:           %s\n"
+           "max threads per sm:    %d\n"
+           "sm count:              %d\n"
+           "total threads:         %d\n"
+           "total global memory:   %zu MB\n"
+           "total constant memory: %zu B\n"
+           "\n",
+           prop.name, max_threads_per_sm, sm_count, total_threads, prop.totalGlobalMem/1024/1024, prop.totalConstMem);
+
+    //
     // init memory
     //
 
@@ -339,15 +361,16 @@ int main() {
     cudaMemset(device_memory.header.memory, 0, device_memory.header.size);
     arena_init(&device_arena, device_memory.header.memory, device_memory.header.size);
 
-    device_memory.curand_states  =        arena_push_array(&device_arena, TOTAL_THREADS,                      curandStateMRG32k3a, sizeof(curandStateMRG32k3a));
-    device_memory.ed25519_seeds  = (u32 *)arena_push_array(&device_arena, TOTAL_THREADS*ED25519_SEED_SIZE,    u8,                  sizeof(u32));
-    device_memory.public_keys    = (u32 *)arena_push_array(&device_arena, TOTAL_THREADS*ED25519_PUB_KEY_SIZE, u8,                  sizeof(u32));
-    device_memory.multisig_pdas  = (u32 *)arena_push_array(&device_arena, TOTAL_THREADS*SHA256_DIGEST_LENGTH, u8,                  sizeof(u32));
-    device_memory.multisig_bumps =        arena_push_array(&device_arena, TOTAL_THREADS,                      u32,                 sizeof(u32));
-    device_memory.vault_pdas     = (u32 *)arena_push_array(&device_arena, TOTAL_THREADS*SHA256_DIGEST_LENGTH, u8,                  sizeof(u32));
-    device_memory.vault_bumps    =        arena_push_array(&device_arena, TOTAL_THREADS,                      u32,                 sizeof(u32));
-    device_memory.vault_pdas_b58 = (u32 *)arena_push_array(&device_arena, TOTAL_THREADS*48,                   u8,                  sizeof(u32));
-    device_memory.found          =        arena_push_array(&device_arena, TOTAL_THREADS,                      u32,                 sizeof(u32));
+    device_memory.curand_states  =        arena_push_array(&device_arena, total_threads*runs_per_dispatch,                      curandStateMRG32k3a, sizeof(curandStateMRG32k3a));
+    device_memory.ed25519_seeds  = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*ED25519_SEED_SIZE,    u8,                  sizeof(u32));
+    device_memory.public_keys    = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*ED25519_PUB_KEY_SIZE, u8,                  sizeof(u32));
+    device_memory.multisig_pdas  = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*SHA256_DIGEST_LENGTH, u8,                  sizeof(u32));
+    device_memory.multisig_bumps =        arena_push_array(&device_arena, total_threads*runs_per_dispatch,                      u32,                 sizeof(u32));
+    device_memory.vault_pdas     = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*SHA256_DIGEST_LENGTH, u8,                  sizeof(u32));
+    device_memory.vault_bumps    =        arena_push_array(&device_arena, total_threads*runs_per_dispatch,                      u32,                 sizeof(u32));
+    device_memory.is_off_curve   =        arena_push_array(&device_arena, total_threads*runs_per_dispatch,                      u32,                 sizeof(u32));
+    device_memory.vault_pdas_b58 = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*48,                   u8,                  sizeof(u32));
+    device_memory.found          =        arena_push_array(&device_arena, total_threads*runs_per_dispatch,                      u32,                 sizeof(u32));
 
     DeviceMemory mirror = {0};
     mirror.header.memory = malloc(device_memory.header.size);
@@ -394,10 +417,21 @@ int main() {
         cudaMemcpyHostToDevice
     ));
 
-    init_curand_states<<<GRID_SIZE, BLOCK_SIZE>>>(device_memory);
+    {
+        int block_size = 256;
+        assert(block_size <= prop.maxThreadsPerBlock);
+
+        int blocks_per_sm = max_threads_per_sm / block_size;
+        int grid_size = blocks_per_sm * sm_count;
+
+        init_curand_states<<<grid_size, block_size>>>(device_memory);
+
+        cudaError_t err = cudaGetLastError();
+        assert(err == cudaSuccess);
+    }
 
     //
-    // main loop
+    // find the optimal kernel configuration
     //
 
     reload_wordlist(&wordlist_arena);
@@ -405,7 +439,100 @@ int main() {
     cudaEvent_t event_start, event_stop;
     cudaEventCreate(&event_start);
     cudaEventCreate(&event_stop);
+
+    int best_block_size = 0;
+    int best_multisig_bump_limit = 0;
+    int best_vault_bump_limit = 0;
+    float best_average_ms = 0;
+    float best_points_per_second = 0;
+
+    int tries = 1;
+
+    for (int block_size = 32; block_size <= 1024; block_size *= 2) {
+        int blocks_per_sm = max_threads_per_sm / block_size;
+        int grid_size = blocks_per_sm * sm_count;
+
+        for (int multisig_bump_limit = 1; multisig_bump_limit <= 4; multisig_bump_limit += 1) {
+            for (int vault_bump_limit = 1; vault_bump_limit <= 4; vault_bump_limit += 1) {
+                float total_ms = 0;
+                int total_on_curve_points = 0;
+
+                int runs = 10;
+                assert(runs > 1);
+
+                cudaError_t err = cudaErrorUnknown;
+
+                for (int run = 0; run < runs; run += 1) {
+                    cudaEventRecord(event_start);
+
+                    kernel<<<grid_size, block_size>>>(device_memory, tries, multisig_bump_limit, vault_bump_limit);
+
+                    cudaEventRecord(event_stop);
+                    cudaEventSynchronize(event_stop);
+
+                    err = cudaGetLastError();
+                    if (!err) {
+                        // ignore the warm-up run
+                        if (run > 0) {
+                            float ms = 0;
+                            cudaEventElapsedTime(&ms, event_start, event_stop);
+                            total_ms += ms;
+
+                            CUDA_CHECK(cudaMemcpy(
+                                mirror.is_off_curve, device_memory.is_off_curve,
+                                total_threads*sizeof(u32),
+                                cudaMemcpyDeviceToHost
+                            ));
+
+                            for (int tid = 0; tid < total_threads; tid += 1) {
+                                if (mirror.is_off_curve[tid]) {
+                                    total_on_curve_points += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!err) {
+                    float average_ms = total_ms / (runs - 1);
+                    float average_on_curve_points = (float)total_on_curve_points / (runs - 1);
+                    float points_per_second = average_on_curve_points * 1000 / average_ms;
+
+                    if (points_per_second > best_points_per_second) {
+                        best_block_size = block_size;
+                        best_multisig_bump_limit = multisig_bump_limit;
+                        best_vault_bump_limit = vault_bump_limit;
+                        best_average_ms = average_ms;
+                        best_points_per_second = points_per_second;
+                    }
+
+                    printf("kernel<<<grid_size:%d, block_size:%d>>>(..., runs_per_dispatch:%d, multisig_bump_limit:%d, vault_bump_limit:%d, ...) average exec time: %f ms (%f points/s)\n", grid_size, block_size, tries, multisig_bump_limit, vault_bump_limit, average_ms, points_per_second);
+                }
+            }
+        }
+    }
+
+    printf("\n"
+           "OPTIMAL CONFIGURATION\n"
+           "block size:          %d\n"
+           "multisig bump limit: %d\n"
+           "vault bump limit:    %d\n"
+           "-----------------------\n"
+           "average ms:          %f\n"
+           "points per second:   %f\n"
+           "\n",
+           best_block_size, best_multisig_bump_limit, best_vault_bump_limit, best_average_ms, best_points_per_second);
+
+    //
+    // main loop
+    //
+
+    int block_size = best_block_size;
+    int blocks_per_sm = max_threads_per_sm / block_size;
+    int grid_size = blocks_per_sm * sm_count;
+
     int found = 0;
+    int cycles = 0;
 #if 1
     while (!found)
 #endif
@@ -420,20 +547,18 @@ int main() {
 
         cudaEventRecord(event_start);
         {
-            // TODO: run multiple rounds inside the kernel instead of rerunning
-            // the kernel for every single round
-            kernel<<<GRID_SIZE, BLOCK_SIZE>>>(device_memory);
+            kernel<<<grid_size, block_size>>>(device_memory, runs_per_dispatch, best_multisig_bump_limit, best_vault_bump_limit);
             CUDA_CHECK(cudaDeviceSynchronize());
         }
         cudaEventRecord(event_stop);
         cudaEventSynchronize(event_stop);
         float ms = 0;
         cudaEventElapsedTime(&ms, event_start, event_stop);
-        printf("kernel<<<%d, %d>>>() exec time: %f ms\n", GRID_SIZE, BLOCK_SIZE, ms);
+        printf("kernel<<<grid_size:%d, block_size:%d>>>(..., runs_per_dispatch:%ld, multisig_bump_limit:%d, vault_bump_limit:%d) exec time: %f ms\n", grid_size, block_size, runs_per_dispatch, best_multisig_bump_limit, best_vault_bump_limit,  ms);
 
         CUDA_CHECK(cudaMemcpy(
             mirror.found, device_memory.found,
-            TOTAL_THREADS*sizeof(u32),
+            total_threads*sizeof(u32),
             cudaMemcpyDeviceToHost
         ));
 

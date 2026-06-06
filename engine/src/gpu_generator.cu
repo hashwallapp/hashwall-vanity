@@ -19,6 +19,7 @@
 #include "third_party/sha256.cu"
 #include "sha512.cu"
 #include "ed25519.cu"
+#include "db.cu"
 
 __constant__ static char *seed_prefix   = "multisig";
 __constant__ static char *seed_multisig = "multisig";
@@ -286,24 +287,28 @@ __global__ void kernel(DeviceMemory memory) {
                 // check prefix
                 //
 
-                int found = 1;
+                int should_break = 0;
+                for (int word_length = MAX_WORD_LENGTH; word_length >= 1; word_length -= 1) {
+                    if (should_break) break;
 
-                for (int i = 0; i < prefix_size; i++) {
-                    if (prefix[i] != b58[i]) {
-                        found = 0;
-                        break;
-                    }
-                }
+                    Arena wordlist = d_wordlists[word_length - 1];
+                    int word_count = wordlist.used / word_length;
+                    for (int word_index = 0; word_index < word_count; word_index += 1) {
+                        if (should_break) break;
 
-                if (found) {
-                    atomicAdd(&global_found, 1);
+                        int word_offset = word_index * word_length;
+                        u8 *word = (u8 *)wordlist.memory + word_offset;
 
-                    for each_coal(it, index, 48) {
-                        memory.vault_pdas_b58[it] = *((uint32_t *)b58 + index);
-                    }
+                        int still_matches = 1;
+                        for (int i = 0; i < word_length; i += 1) {
+                            still_matches &= word[i] == b58[i];
+                        }
 
-                    for each_coal(it, index, 4) {
-                        memory.found[it] = found;
+                        for each_coal_tid(u32, found, memory.found, sizeof(u32), current_run) {
+                            *found.data = still_matches;
+                        }
+
+                        should_break = still_matches;
                     }
                 }
             }
@@ -314,6 +319,20 @@ __global__ void kernel(DeviceMemory memory) {
 }
 
 int main() {
+    //
+    // init sqlite
+    //
+
+    // NOTE: this conversion is redundant since db_name string view points to
+    // a command line argument which is already null-terminated. but it's
+    // probably better to keep it in case db_name get trimmed or becomes a
+    // string of a larger string later
+    char *db_name_cstr = string_view_to_cstr(db_name, &host_arena);
+
+    sqlite3 *db;
+    SQLITE_CHECK(sqlite3_open(db_name_cstr, &db));
+    prepare_sql_statements(db);
+
     //
     // init memory
     //
@@ -351,6 +370,18 @@ int main() {
     COPY(u32, found);
 #undef COPY
 
+    // wordlist arena
+    Arena wordlist_arena;
+    arena_make_subarena(&wordlist_arena, &host_arena, WORDLIST_SIZE, 256);
+
+    // TODO: wordlist arena device mirror
+#if 0
+    Arena d_wordlist_arena;
+    void *d_wordlist_memory;
+    cudaMalloc(&d_wordlist_memory, WORDLIST_SIZE);
+    arena_init(&d_wordlist_arena, d_wordlist_memory, WORDLIST_SIZE);
+#endif
+
     //
     // init curand states
     //
@@ -374,6 +405,8 @@ int main() {
     // main loop
     //
 
+    reload_wordlist(&wordlist_arena);
+
     cudaEvent_t event_start, event_stop;
     cudaEventCreate(&event_start);
     cudaEventCreate(&event_stop);
@@ -382,6 +415,14 @@ int main() {
     while (!found)
 #endif
     {
+#if 1
+        if (cycles % 100 == 0) {
+            cycles = 0;
+            reload_wordlist(&wordlist_arena);
+        }
+        cycles += 1;
+#endif
+
         cudaEventRecord(event_start);
         {
             // TODO: run multiple rounds inside the kernel instead of rerunning
@@ -401,44 +442,42 @@ int main() {
             cudaMemcpyDeviceToHost
         ));
 
-        for (int tid = 0; tid < TOTAL_THREADS; tid++) {
-            if (mirror.found[tid]) {
-                found = 1;
+        for (int current_run = 0; current_run < runs_per_dispatch; current_run += 1) {
+            for (int tid = 0; tid < total_threads; tid += 1) {
+                if (mirror.found[tid]) {
+                    CUDA_CHECK(cudaMemcpy(mirror.ed25519_seeds, device_memory.ed25519_seeds, total_threads*runs_per_dispatch*ED25519_SEED_SIZE*sizeof(u32),    cudaMemcpyDeviceToHost));
+                    CUDA_CHECK(cudaMemcpy(mirror.public_keys,   device_memory.public_keys,   total_threads*runs_per_dispatch*ED25519_PUB_KEY_SIZE*sizeof(u32), cudaMemcpyDeviceToHost));
+                    CUDA_CHECK(cudaMemcpy(mirror.vault_pdas,    device_memory.vault_pdas,    total_threads*runs_per_dispatch*32,                               cudaMemcpyDeviceToHost));
 
-                CUDA_CHECK(cudaMemcpy(
-                    mirror.ed25519_seeds, device_memory.ed25519_seeds,
-                    TOTAL_THREADS*ED25519_SEED_SIZE*sizeof(u32),
-                    cudaMemcpyDeviceToHost
-                ));
-                CUDA_CHECK(cudaMemcpy(
-                    mirror.public_keys, device_memory.public_keys,
-                    TOTAL_THREADS*ED25519_PUB_KEY_SIZE*sizeof(u32),
-                    cudaMemcpyDeviceToHost
-                ));
-
-                printf("create_key: ");
-                for each_coal_(tid, NTHREADS, i, index, ED25519_PUB_KEY_SIZE) {
-                    printf("%08x", htobe32(mirror.public_keys[i]));
-                }
-                printf("\n");
-
-                printf("keypair: [");
-                for each_coal_(tid, NTHREADS, i, index, ED25519_SEED_SIZE) {
-                    u32 c = mirror.ed25519_seeds[i];
-                    printf("%d,%d,%d,%d,", (u8)(c >> 24), (u8)(c >> 16), (u8)(c >> 8), (u8)(c));
-                }
-
-                for each_coal_(tid, NTHREADS, i, index, ED25519_PUB_KEY_SIZE) {
-                    u32 c = mirror.public_keys[i];
-                    if (index < ED25519_PUB_KEY_SIZE/4 - 1) {
-                        printf("%d,%d,%d,%d,", (u8)(c), (u8)(c >> 8), (u8)(c >> 16), (u8)(c >> 24));
-                    } else {
-                        printf("%d,%d,%d,%d", (u8)(c), (u8)(c >> 8), (u8)(c >> 16), (u8)(c >> 24));
+                    char keypair[256] = {0};
+                    for each_strided(u32, seed, mirror.ed25519_seeds, ED25519_SEED_SIZE, tid, total_threads, current_run) {
+                        u32 c = *seed.data;
+                        char src[255] = {0};
+                        stbsp_sprintf(src, "%d,%d,%d,%d,", (u8)(c >> 24), (u8)(c >> 16), (u8)(c >> 8), (u8)(c));
+                        strcat(keypair, src);
                     }
-                }
-                printf("]\n");
+                    for each_strided(u32, key, mirror.public_keys, ED25519_PUB_KEY_SIZE, tid, total_threads, current_run) {
+                        u32 c = *key.data;
+                        uptr index = key.index;
+                        char src[255] = {0};
+                        if (index < ED25519_PUB_KEY_SIZE/4 - 1) {
+                            stbsp_sprintf(src, "%d,%d,%d,%d,", (u8)(c), (u8)(c >> 8), (u8)(c >> 16), (u8)(c >> 24));
+                        } else {
+                            stbsp_sprintf(src, "%d,%d,%d,%d", (u8)(c), (u8)(c >> 8), (u8)(c >> 16), (u8)(c >> 24));
+                        }
+                        strcat(keypair, src);
+                    }
 
-                break;
+                    char pda[SHA256_DIGEST_LENGTH] = {0};
+                    for each_strided(u32, item, mirror.vault_pdas, 32, tid, total_threads, current_run) {
+                        *((u32 *)pda + item.index) = *item.data;
+                    }
+
+                    printf("keypair: \n"
+                           "[%s]\n", keypair);
+
+                    save_found_vault(db, keypair, pda);
+                }
             }
         }
     }

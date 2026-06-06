@@ -198,6 +198,28 @@ __global__ void kernel(DeviceMemory memory) {
 
     for (int i = 0; i < 1; i++) {
         if (global_found) break;
+__global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
+    for (int current_run = 0; current_run < runs_per_dispatch; current_run += 1) {
+        for each_coal_tid(u32, seed_chunk, memory.ed25519_seeds, ED25519_SEED_SIZE, current_run) {
+            *seed_chunk.data = 0;
+        }
+        for each_coal_tid(u32, pk_chunk, memory.public_keys, ED25519_PUB_KEY_SIZE, current_run) {
+            *pk_chunk.data = 0;
+        }
+        for each_coal_tid(u32, pda_chunk, memory.multisig_pdas, SHA256_DIGEST_LENGTH, current_run) {
+            *pda_chunk.data = 0;
+        }
+        for each_coal_tid(u32, pda_chunk, memory.vault_pdas, SHA256_DIGEST_LENGTH, current_run) {
+            *pda_chunk.data = 0;
+        }
+        for each_coal_tid(u32, found, memory.is_off_curve, sizeof(u32), current_run) {
+            *found.data = 0;
+        }
+        for each_coal_tid(u32, found, memory.found, sizeof(u32), current_run) {
+            *found.data = 0;
+        }
+    }
+}
 
         //
         // random seeds
@@ -583,6 +605,7 @@ int main(int argc, char **argv) {
     while (!found)
 #endif
     {
+        reset_memory<<<grid_size, block_size>>>(device_memory, runs_per_dispatch);
 #if 1
         if (cycles % 100 == 0) {
             cycles = 0;

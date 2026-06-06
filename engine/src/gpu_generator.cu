@@ -14,8 +14,8 @@
     } while (0)
 
 #include "config.h"
-#include "typedef.h"
-#include "arena.c"
+#define each_coal_tid(type, item, ptr, size, stride_offset) each_strided(type, item, ptr, size, TID, NTHREADS, stride_offset)
+#include "slpng.c"
 #include "third_party/sha256.cu"
 #include "sha512.cu"
 #include "ed25519.cu"
@@ -29,11 +29,6 @@ __constant__ static u8    program_id[32] = { 6, 129, 196, 206, 71, 226, 35, 104,
 
 #define MULTISIG_SEEDS_SIZE (8 + 8 + 32 + 1 + 32 + 21) // "multisig" + "multisig" + pk + bump + program_id + "ProgramDerivedAddress"
 #define VAULT_SEEDS_SIZE (8 + 32 + 5 + 1 + 1+ 32 + 21) // "multisig" + multisig_pda + "vault" + index + bump + program_id + "ProgramDerivedAddress"
-
-// TODO: pad size so it's divisible by sizeof(type)
-// TODO: make `it` a pointer instead of an offset?
-#define each_coal_(tid, nthreads, it, index, size) (size_t it = (tid), index = 0; it < (tid) + (nthreads)*(size)/sizeof(u32); it += (nthreads), index += 1)
-#define each_coal(it, index, size) each_coal_((TID), (NTHREADS), it, index, (size))
 
 typedef struct {
     void *memory;

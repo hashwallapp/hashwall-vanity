@@ -32,12 +32,6 @@ __constant__ static u8    program_id[32] = { 6, 129, 196, 206, 71, 226, 35, 104,
 #define VAULT_SEEDS_SIZE (8 + 32 + 5 + 1 + 1+ 32 + 21) // "multisig" + multisig_pda + "vault" + index + bump + program_id + "ProgramDerivedAddress"
 
 typedef struct {
-    void *memory;
-    size_t size;
-} DeviceMemoryHeader;
-
-typedef struct {
-    DeviceMemoryHeader header;
     curandStateMRG32k3a *curand_states;
     u32 *ed25519_seeds;
     u32 *public_keys;
@@ -45,9 +39,29 @@ typedef struct {
     u32 *multisig_bumps;
     u32 *vault_pdas;
     u32 *vault_bumps;
+    u32 *is_off_curve;
     u32 *vault_pdas_b58;
     u32 *found;
 } DeviceMemory;
+
+TYPEDEF_ARENA_UNION(DeviceMemory);
+
+void copy_device_memory(DeviceMemory *dst, Arena *dst_arena, DeviceMemory *src, Arena *src_arena) {
+#if 0
+    dst->curand_states  = (curandStateMRG32k3a *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->curand_states));
+    dst->ed25519_seeds  =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->ed25519_seeds));
+    dst->public_keys    =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->public_keys));
+    dst->multisig_pdas  =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->multisig_pdas));
+    dst->multisig_bumps =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->multisig_bumps));
+    dst->vault_pdas     =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->vault_pdas));
+    dst->vault_bumps    =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->vault_bumps));
+    dst->is_off_curve   =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->is_off_curve));
+    dst->vault_pdas_b58 =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->vault_pdas_b58));
+    dst->found          =                 (u32 *)((uptr)(dst_arena->memory) + arena_get_offset(src_arena, (uptr)src->found));
+#else
+    arena_copy_offsets(dst, dst_arena, src, src_arena, DeviceMemory);
+#endif
+}
 
 __constant__ u64 d_urandom_seed;
 __global__ void init_curand_states(DeviceMemory memory) {
@@ -354,13 +368,16 @@ int main() {
     // init memory
     //
 
-    Arena device_arena;
-    DeviceMemory device_memory = {0};
-    device_memory.header.size = 1*1024*1024*1024;
-    cudaMalloc(&device_memory.header.memory, device_memory.header.size);
-    cudaMemset(device_memory.header.memory, 0, device_memory.header.size);
-    arena_init(&device_arena, device_memory.header.memory, device_memory.header.size);
+    // device memory and arena
+    u64 device_buffer_size = 1*1024*1024*1024;
+    void *device_buffer;
+    cudaMalloc(&device_buffer, device_buffer_size);
+    cudaMemset(device_buffer, 0, device_buffer_size);
 
+    Arena device_arena;
+    arena_init(&device_arena, device_buffer, device_buffer_size);
+
+    DeviceMemory device_memory = {0};
     device_memory.curand_states  =        arena_push_array(&device_arena, total_threads*runs_per_dispatch,                      curandStateMRG32k3a, sizeof(curandStateMRG32k3a));
     device_memory.ed25519_seeds  = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*ED25519_SEED_SIZE,    u8,                  sizeof(u32));
     device_memory.public_keys    = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*ED25519_PUB_KEY_SIZE, u8,                  sizeof(u32));
@@ -372,21 +389,25 @@ int main() {
     device_memory.vault_pdas_b58 = (u32 *)arena_push_array(&device_arena, total_threads*runs_per_dispatch*48,                   u8,                  sizeof(u32));
     device_memory.found          =        arena_push_array(&device_arena, total_threads*runs_per_dispatch,                      u32,                 sizeof(u32));
 
+    // device memory host mirror
+    Arena mirror_arena;
+    arena_make_subarena(&mirror_arena, &host_arena, device_buffer_size, 256);
+    memset(mirror_arena.memory, 0, mirror_arena.capacity);
+
     DeviceMemory mirror = {0};
-    mirror.header.memory = malloc(device_memory.header.size);
-    mirror.header.size = device_memory.header.size;
-    // TODO: automate this
-#define COPY(type, name) mirror.name = (type *)((u8 *)mirror.header.memory + ((u8 *)device_memory.name - (u8 *)device_memory.header.memory))
-    COPY(curandStateMRG32k3a, curand_states);
-    COPY(u32, ed25519_seeds);
-    COPY(u32, public_keys);
-    COPY(u32, multisig_pdas);
-    COPY(u32, multisig_bumps);
-    COPY(u32, vault_pdas);
-    COPY(u32, vault_bumps);
-    COPY(u32, vault_pdas_b58);
-    COPY(u32, found);
-#undef COPY
+    copy_device_memory(&mirror, &mirror_arena, &device_memory, &device_arena);
+
+    // TODO: remove later
+    assert((u8 *)mirror.curand_states  - (u8 *)mirror_arena.memory == (u8 *)device_memory.curand_states  - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.ed25519_seeds  - (u8 *)mirror_arena.memory == (u8 *)device_memory.ed25519_seeds  - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.public_keys    - (u8 *)mirror_arena.memory == (u8 *)device_memory.public_keys    - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.multisig_pdas  - (u8 *)mirror_arena.memory == (u8 *)device_memory.multisig_pdas  - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.multisig_bumps - (u8 *)mirror_arena.memory == (u8 *)device_memory.multisig_bumps - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.vault_pdas     - (u8 *)mirror_arena.memory == (u8 *)device_memory.vault_pdas     - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.vault_bumps    - (u8 *)mirror_arena.memory == (u8 *)device_memory.vault_bumps    - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.is_off_curve   - (u8 *)mirror_arena.memory == (u8 *)device_memory.is_off_curve   - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.vault_pdas_b58 - (u8 *)mirror_arena.memory == (u8 *)device_memory.vault_pdas_b58 - (u8 *)device_arena.memory);
+    assert((u8 *)mirror.found          - (u8 *)mirror_arena.memory == (u8 *)device_memory.found          - (u8 *)device_arena.memory);
 
     // wordlist arena
     Arena wordlist_arena;

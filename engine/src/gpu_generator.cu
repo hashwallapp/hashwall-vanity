@@ -1,26 +1,42 @@
+//
+// libc
+//
+
 #include <stdio.h>
 #include <assert.h>
 
+//
+// CUDA
+//
+
 #include <curand_kernel.h>
 
-#define CUDA_CHECK(call)                                              \
-    do {                                                              \
-        cudaError_t err = call;                                       \
-        if (err != cudaSuccess) {                                     \
-            fprintf(stderr, "CUDA Error in %s at %s:%d: %s\n", #call, \
-                    __FILE__, __LINE__, cudaGetErrorString(err));     \
-            exit(1);                                                  \
-        }                                                             \
+#define CUDA_CHECK(call)                                                  \
+    do {                                                                  \
+        cudaError_t err = call;                                           \
+        if (err != cudaSuccess) {                                         \
+            fprintf(stderr, "CUDA Error in %s at %s:%d: %s\n",            \
+                    #call , __FILE__, __LINE__, cudaGetErrorString(err)); \
+            exit(1);                                                      \
+        }                                                                 \
     } while (0)
 
 #define NTHREADS (gridDim.x * blockDim.x)
 #define TID (blockDim.x * blockIdx.x + threadIdx.x)
 #define each_coal_tid(type, item, ptr, size, stride_offset) each_strided(type, item, ptr, size, TID, NTHREADS, stride_offset)
+
+//
+// program
+//
+
 #include "slpng.c"
 #include "third_party/sha256.cu"
 #include "sha512.cu"
 #include "ed25519.cu"
 #include "db.cu"
+
+#define STB_SPRINTF_IMPLEMENTATION
+#include "third_party/stb_sprintf.h"
 
 __constant__ static char *seed_prefix   = "multisig";
 __constant__ static char *seed_multisig = "multisig";
@@ -121,8 +137,6 @@ __device__ bool b58enc(char *b58, unsigned int *b58sz, const unsigned char *data
     return true;
 }
 
-__device__ int global_found = 0;
-
 typedef struct {
     u32 is_on_curve;
     u32 pda[SHA256_DIGEST_LENGTH/sizeof(u32)];
@@ -192,12 +206,6 @@ __device__ PdaResult find_vault_pda(u8 multisig_pda[32], u8 vault_index, int bum
     return result;
 }
 
-__global__ void kernel(DeviceMemory memory) {
-    char prefix[4] = "SAS";
-    int prefix_size = 3;
-
-    for (int i = 0; i < 1; i++) {
-        if (global_found) break;
 __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
     for (int current_run = 0; current_run < runs_per_dispatch; current_run += 1) {
         for each_coal_tid(u32, seed_chunk, memory.ed25519_seeds, ED25519_SEED_SIZE, current_run) {
@@ -250,6 +258,7 @@ __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
         sha512_transform_state(state, m, SHA512_OUTPUT_DATA, SHA512_DATA_MEMORY_LOCAL);
 
         // because ed25519 operates on individual chars
+        // TODO: is this bswap really necessary?
         for (int i = 0; i < ED25519_SEED_SIZE/4; i++) { m[i] = __nv_bswap32(m[i]); }
 
         ge25519_p3 A;
@@ -344,7 +353,7 @@ __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
             }
         }
 
-        // TODO: BARRIER
+        // TODO: BARRIER before next run
     }
 }
 

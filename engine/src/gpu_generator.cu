@@ -229,13 +229,17 @@ __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
     }
 }
 
+__global__ void kernel(DeviceMemory memory, int runs_per_dispatch, int multisig_bump_limit, int vault_bump_limit) {
+#if 1
+    for (int current_run = 0; current_run < runs_per_dispatch; current_run += 1) {
         //
         // random seeds
         //
 
-        for each_coal(it, index, ED25519_SEED_SIZE) {
+        for each_coal_tid(u32, seed_chunk, memory.ed25519_seeds, ED25519_SEED_SIZE, current_run)
+        {
             u32 chunk = curand(memory.curand_states + TID);
-            memory.ed25519_seeds[it] = chunk;
+            *seed_chunk.data = chunk;
         }
 
         //
@@ -249,10 +253,13 @@ __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
 
         {
             int cursor = 0;
-            for each_coal(it, idx, ED25519_SEED_SIZE) { m[cursor++] = memory.ed25519_seeds[it]; }
-                                                        m[cursor++] = 0x80000000;
-            for (int i = cursor; i < 128/4-1; i++)    { m[cursor++] = 0; }
-                                                        m[cursor++] = ED25519_SEED_SIZE*8;
+
+            for each_coal_tid(u32, seed_chunk,
+                              memory.ed25519_seeds, ED25519_SEED_SIZE,
+                              current_run)                             { m[cursor++] = *seed_chunk.data; }
+                                                                         m[cursor++] = 0x80000000;
+            for (int i = cursor; i < 128/4-1; i++)                     { m[cursor++] = 0; }
+                                                                         m[cursor++] = ED25519_SEED_SIZE*8;
         }
 
         sha512_transform_state(state, m, SHA512_OUTPUT_DATA, SHA512_DATA_MEMORY_LOCAL);
@@ -272,26 +279,24 @@ __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
         ge25519_scalarmult_base(&A, priv_key);
         ge25519_p3_tobytes(pub_key, &A);
 
-        for each_coal(it, index, ED25519_PUB_KEY_SIZE) {
-            memory.public_keys[it] = *((uint32_t *)pub_key + index);
+        for each_coal_tid(u32, pk_chunk, memory.public_keys, ED25519_PUB_KEY_SIZE, current_run) {
+            *pk_chunk.data = *((uint32_t *)pub_key + pk_chunk.index);
         }
 
         //
         // MULTISIG PDA
         //
 
-        PdaResult multisig_pda = find_multisig_pda(pub_key);
-
-        // TODO: BARRIER
+        PdaResult multisig_pda = find_multisig_pda(pub_key, multisig_bump_limit);
 
         if (!multisig_pda.is_on_curve) {
 #if 0
-            for each_coal(it, index, 32) {
-                memory.multisig_pdas[it] = multisig_pda.pda[index];
+            for each_coal_tid(u32, pda_chunk, memory.multisig_pdas, SHA256_DIGEST_LENGTH, current_run) {
+                *pda_chunk.data = multisig_pda.pda[pda_chunk.index];
             }
 
-            for each_coal(it, index, sizeof(u32)) {
-                memory.multisig_bumps[it] = multisig_pda.bump;
+            for each_coal_tid(u32, bump, memory.multisig_bumps, sizeof(u32), current_run) {
+                *bump.data = multisig_pda.bump;
             }
 #endif
 
@@ -299,18 +304,18 @@ __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
             // VAULT PDA
             //
 
-            PdaResult vault_pda = find_vault_pda((u8 *)multisig_pda.pda, 0);
-
-            // TODO: BARRIER
+            PdaResult vault_pda = find_vault_pda((u8 *)multisig_pda.pda, 0, vault_bump_limit);
 
             if (!vault_pda.is_on_curve) {
-#if 0
-                for each_coal(it, index, 32) {
-                    memory.vault_pdas[it] = vault_pda.pda[index];
+                memory.is_off_curve[TID] = 1;
+
+                for each_coal_tid(u32, pda_chunk, memory.vault_pdas, SHA256_DIGEST_LENGTH, current_run) {
+                    *pda_chunk.data = vault_pda.pda[pda_chunk.index];
                 }
 
-                for each_coal(it, index, sizeof(u32)) {
-                    memory.vault_bumps[it] = vault_pda.bump;
+#if 0
+                for each_coal_tid(u32, bump, memory.vault_bumps, sizeof(u32), current_run) {
+                    *bump.data = vault_pda.bump;
                 }
 #endif
 
@@ -355,6 +360,7 @@ __global__ void reset_memory(DeviceMemory memory, int runs_per_dispatch) {
 
         // TODO: BARRIER before next run
     }
+#endif
 }
 
 int main(int argc, char **argv) {

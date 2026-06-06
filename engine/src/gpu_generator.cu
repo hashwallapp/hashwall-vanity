@@ -129,8 +129,7 @@ typedef struct {
     u32 bump;
 } PdaResult;
 
-__device__
-PdaResult find_multisig_pda(u8 pub_key[ED25519_PUB_KEY_SIZE]) {
+__device__ PdaResult find_multisig_pda(u8 pub_key[ED25519_PUB_KEY_SIZE], int bump_limit) {
     PdaResult result = {0};
 
     u8 seeds[MULTISIG_SEEDS_SIZE];
@@ -148,7 +147,7 @@ PdaResult find_multisig_pda(u8 pub_key[ED25519_PUB_KEY_SIZE]) {
     for (int i = 0; i < 21; i++) { seeds[cursor++] = pda_postfix[i]; }
 
     int is_on_curve = 1;
-    for (int bumps = 0; bumps < 1 && is_on_curve; bumps++) {
+    for (int bumps = 0; bumps < bump_limit && is_on_curve; bumps++) {
         SHA256(seeds, MULTISIG_SEEDS_SIZE, (u8 *)result.pda);
         is_on_curve = is_valid_point((u8 *)result.pda);
         bump -= 1;
@@ -161,8 +160,7 @@ PdaResult find_multisig_pda(u8 pub_key[ED25519_PUB_KEY_SIZE]) {
     return result;
 }
 
-__device__
-PdaResult find_vault_pda(u8 multisig_pda[32], u8 vault_index) {
+__device__ PdaResult find_vault_pda(u8 multisig_pda[32], u8 vault_index, int bump_limit) {
     PdaResult result = {0};
 
     u8 seeds[VAULT_SEEDS_SIZE];
@@ -181,7 +179,7 @@ PdaResult find_vault_pda(u8 multisig_pda[32], u8 vault_index) {
     for (int i = 0; i < 21; i++) { seeds[cursor++] = pda_postfix[i]; }
 
     int is_on_curve = 1;
-    for (int bumps = 0; bumps < 1 && is_on_curve; bumps++) {
+    for (int bumps = 0; bumps < bump_limit && is_on_curve; bumps++) {
         SHA256(seeds, VAULT_SEEDS_SIZE, (u8 *)result.pda);
         is_on_curve = is_valid_point((u8 *)result.pda);
         bump -= 1;

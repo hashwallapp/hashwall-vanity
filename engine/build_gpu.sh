@@ -12,14 +12,21 @@ if [ ! -f ./build/sqlite3.a ]; then
     ar rcs ./build/sqlite3.a ./build/sqlite3.o
 fi
 
+#
+# compile generator
+#
+
 flags_debug="-O0 -g -G"
-flags_release="-O3 -maxrregcount=128"
-flags_warnings="-Wno-deprecated-gpu-targets -diag-suppress 2464,550"
+flags_release="-O3"
+
+flags_warnings="-Wno-deprecated-gpu-targets -diag-suppress 2464,550,177"
+
 flags_card_1060="-arch=sm_61"
 flags_card_1650="-arch=sm_75"
 flags_card_3050="-arch=sm_86"
 flags_card_5060="-arch=sm_120"
 
-flags="$flags_release $flags_card_1060 $flags_warnings -std=c++11"
+flags="$flags_release $flags_card_1060 $flags_warnings -std=c++11 -maxrregcount=128"
 
+echo "compiling gpu_generator"
 nvcc $flags -o ./build/gpu_generator ./src/gpu_generator.cu ./build/sqlite3.a

@@ -328,7 +328,34 @@ __global__ void kernel(DeviceMemory memory) {
     }
 }
 
-int main() {
+int main(int argc, char **argv) {
+    Arena host_arena = {0};
+    uptr host_memory_size = 2*1024*1024*1024LL;
+    void *host_memory = malloc(host_memory_size);
+    arena_init(&host_arena, host_memory, host_memory_size);
+
+    //
+    // parse command line arguments
+    //
+
+    Flag_Parser_Options options = {0};
+    options.program_name = string_view_from_cstr(argv[0]);
+    options.max_flags = 4;
+    options.backing_arena = &host_arena;
+    Flag_Parser parser = flag_parser_init(options);
+
+    u64 runs_per_dispatch = 1; flag_parser_bind(&parser, FLAG_TYPE_U64,         &runs_per_dispatch, false, "runs", "amount of runs per kernel dispatch");
+    String_View db_name = {0}; flag_parser_bind(&parser, FLAG_TYPE_STRING_VIEW, &db_name,           true,  "db",   "path to sqlite .db file");
+
+    flag_parser_parse(&parser, argc, argv);
+
+    printf("CONFIGURATION\n"
+           "database name:     %.*s\n"
+           "runs per dispatch: %lu\n"
+           "\n",
+           (int)db_name.length, db_name.bytes,
+           runs_per_dispatch);
+
     //
     // init sqlite
     //

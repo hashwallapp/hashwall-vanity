@@ -1,0 +1,5 @@
+#include "base_core.c"
+#include "base_arena.c"
+#include "base_ds.c"
+#include "base_string.c"
+#include "base_flags.c"

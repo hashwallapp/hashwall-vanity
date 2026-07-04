@@ -997,7 +997,7 @@ __device__ void fe25519_invert(fe25519 out, const fe25519 z) {
     fe25519_mul(out, t1, t0);
 }
 
-__device__ int sodium_is_zero(const unsigned char *n, const uptr nlen) {
+__device__ int is_zero(const unsigned char *n, const uptr nlen) {
     // NOTE: removed volatile, changed type from u8 to u32
     u32 d = 0U;
 
@@ -1013,7 +1013,7 @@ __device__ int fe25519_iszero(const fe25519 f) {
 
     fe25519_tobytes(s, f);
 
-    return sodium_is_zero(s, 32);
+    return is_zero(s, 32);
 }
 
 __device__ inline int fe25519_isnegative(const fe25519 f) {
@@ -1429,16 +1429,38 @@ __device__ int ge25519_is_on_main_subgroup(const ge25519_p3 *p) {
     return fe25519_iszero(pl.X) & fe25519_iszero(t);
 }
 
+/*
+TODO: figure out if this matters for us
+
+===================================================
+   libsodium 1.0.19: test/default/test-suite.log
+===================================================
+
+# TOTAL: 80
+# PASS:  79
+# SKIP:  0
+# XFAIL: 0
+# FAIL:  1
+# XPASS: 0
+# ERROR: 0
+
+.. contents:: :depth: 2
+
+FAIL: core_ed25519
+==================
+
+core_ed25519: core_ed25519.c:136: xmain: Assertion `crypto_core_ed25519_is_valid_point(p) == 0' failed.
+FAIL core_ed25519 (exit status: 134)
+*/
 __device__ int is_valid_point(const unsigned char *p) {
     ge25519_p3 p_p3;
 
-    // TODO: maybe `ge25519_is_on_curve` is sufficient on its own?
     if (
         0
         //|| ge25519_is_canonical(p) == 0
+        //|| ge25519_has_small_order(&p_p3) != 0
         || ge25519_frombytes(&p_p3, p) != 0
         || ge25519_is_on_curve(&p_p3) == 0
-        //|| ge25519_has_small_order(&p_p3) != 0
         //|| ge25519_is_on_main_subgroup(&p_p3) == 0
     ) {
         return 0;

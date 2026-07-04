@@ -106,8 +106,7 @@ void reload_wordlist(Arena *arena) {
         int word_count = atoi((const char *)n_str);
         int word_length = row + 1;
 
-        Arena wordlist = {0};
-        arena_make_subarena(&wordlist, arena, word_count*word_length, 0);
+        Arena wordlist = arena_make_subarena(arena, word_count*word_length, 0);
         wordlists[row] = wordlist;
 
         row += 1;
@@ -126,7 +125,7 @@ void reload_wordlist(Arena *arena) {
 
         Arena *wordlist = wordlists + size - 1;
         for (int i = 0; i < size; i++) {
-            u8 *byte = arena_push_type(wordlist, u8, 0);
+            u8 *byte = arena_push_type(wordlist, u8);
             *byte = word[i];
         }
     }
@@ -143,7 +142,7 @@ void reload_wordlist(Arena *arena) {
         void *wordlist_memory;
         CUDA_CHECK(cudaGetSymbolAddress(&wordlist_memory, d_wordlist_memory));
 
-        uintptr_t new_ptr = (uintptr_t)wordlist_memory + arena_get_offset(arena, (uintptr_t)wordlist->memory);
+        sptr new_ptr = (sptr)wordlist_memory + arena_get_offset(arena, (sptr)wordlist->memory);
         wordlist->memory = (void *)new_ptr;
     }
     CUDA_CHECK(cudaMemcpyToSymbol(
@@ -158,7 +157,7 @@ void reload_wordlist(Arena *arena) {
     ));
 }
 
-void save_found_vault(sqlite3 *db, char *keypair, char pda[SHA256_DIGEST_LENGTH]) {
+void save_found_vault(sqlite3 *db, String8 keypair, char pda[48]) {
     // NOTE: crashing if binding went wrong is ok
 
     SQLITE_CHECK(sqlite3_bind_text(
@@ -167,19 +166,19 @@ void save_found_vault(sqlite3 *db, char *keypair, char pda[SHA256_DIGEST_LENGTH]
             insert_found_vault_stmt,
             "@seed"
         ),
-        keypair,
-        -1,
+        (const char *)keypair.bytes,
+        keypair.length,
         SQLITE_STATIC
     ));
 
-    SQLITE_CHECK(sqlite3_bind_blob(
+    SQLITE_CHECK(sqlite3_bind_text(
         insert_found_vault_stmt,
         sqlite3_bind_parameter_index(
             insert_found_vault_stmt,
             "@address"
         ),
         pda,
-        SHA256_DIGEST_LENGTH,
+        48,
         SQLITE_STATIC
     ));
 

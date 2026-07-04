@@ -600,6 +600,25 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE(vsprintfcb)(STBSP_SPRINTFCB *callback,
          // copy the string in
          goto scopy;
 
+      case 'S':
+      {
+         String8 string = va_arg(va, String8);
+
+         if (string.bytes == 0 || string.length == 0)
+            s = (char *)"null";
+
+         s = (char *)string.bytes;
+         l = string.length; // TODO: limit to precision
+
+         lead[0] = 0;
+         tail[0] = 0;
+         pr = 0;
+         dp = 0;
+         cs = 0;
+
+         goto scopy;
+      }
+
       case 'c': // char
          // get the character
          s = num + STBSP__NUMSZ - 1;

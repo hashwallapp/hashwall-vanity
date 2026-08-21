@@ -10,7 +10,7 @@ Hashwall is a specialized infrastructure for secure, branded multisig vanity add
 ## 🚀 The Core: GPU-Accelerated Engine
 Unlike standard CPU-based tools, Hashwall utilizes a **proprietary CUDA-optimized engine** to achieve massive parallelization in address generation. 
 *   **Performance:** Optimized for `ed25519` curve vanity search.
-*   *   **Performance:** Optimized for `SHA-512` hashing algorithm, made with sience-based papers in mind.
+*   **Performance:** Optimized for `SHA-512` hashing algorithm, made with sience-based papers in mind.
 *   **Use Case:** Branded security for DAOs, Institutional Multisigs (Squads), and Consumer Wallets.
 *   **Infrastructure:** Native integration with the Squads ecosystem.
 
